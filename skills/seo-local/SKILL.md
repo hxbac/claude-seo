@@ -8,6 +8,7 @@ description: >
   and industry vertical. Use when user says "local SEO", "Google Business
   Profile", "GBP", "map pack", "local pack", "citations", "NAP
   consistency", "service area", or "multi-location".
+  Also use when the request is written in Vietnamese, for example "SEO địa phương", "SEO local", "doanh nghiệp địa phương", "khách gần đây".
 user-invocable: true
 argument-hint: "[url]"
 license: MIT

@@ -7,6 +7,7 @@ description: >
   Use when user says "content brief", "write a brief", "content outline",
   "blog brief", "service page brief", "brief for", "writing brief",
   "content plan", or "outline for".
+  Also use when the request is written in Vietnamese, for example "brief nội dung", "đề cương cho người viết", "brief SEO".
 user-invocable: true
 argument-hint: "[url-or-keyword] [page-type]"
 license: MIT

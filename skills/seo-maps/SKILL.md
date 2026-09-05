@@ -8,6 +8,7 @@ description: >
   DataForSEO, and DataForSEO + Google. Use when user says "maps", "geo-grid",
   "rank tracking", "GBP audit", "review velocity", "competitor radius", or
   "SoLV".
+  Also use when the request is written in Vietnamese, for example "Google Maps", "bản đồ", "vị trí cửa hàng", "Google Business Profile".
 user-invocable: true
 argument-hint: "[command] [url|keyword|location]"
 license: MIT

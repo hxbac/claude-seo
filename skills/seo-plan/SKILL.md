@@ -6,6 +6,7 @@ description: >
   roadmap. Use when user says "SEO plan", "SEO strategy", "SEO planning",
   "content strategy", "keyword strategy", "content calendar",
   "site architecture", or "SEO roadmap".
+  Also use when the request is written in Vietnamese, for example "kế hoạch SEO", "lộ trình SEO", "làm gì trước làm gì sau".
 user-invocable: true
 argument-hint: "[business-type]"
 license: MIT

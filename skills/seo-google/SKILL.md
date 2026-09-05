@@ -7,6 +7,7 @@ description: >
   indexation status, search performance, and organic traffic trends. Use when
   user says "search console", "GSC", "PageSpeed", "CrUX", "field data",
   "indexing API", "GA4 organic", "URL inspection", or "real CWV data".
+  Also use when the request is written in Vietnamese, for example "Search Console", "Core Web Vitals", "tốc độ trang", "dữ liệu Google", "web chậm".
 user-invocable: true
 argument-hint: "[command] [url|property]"
 license: MIT

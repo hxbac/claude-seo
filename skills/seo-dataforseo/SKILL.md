@@ -7,6 +7,7 @@ description: >
   mention tracking), and domain analytics. Requires DataForSEO extension
   installed. Use when user says "dataforseo", "live SERP", "keyword volume",
   "backlink data", "AI visibility check", or "real search data".
+  Also use when the request is written in Vietnamese, for example "volume từ khoá", "tra từ khoá", "lượng tìm kiếm", "từ khoá này bao nhiêu search".
 user-invocable: true
 argument-hint: "[command] [query]"
 license: MIT
