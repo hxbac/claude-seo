@@ -2,7 +2,7 @@
 
 ## 1. The problem in one paragraph
 
-`claude-blog` scores every post through `scripts/analyze_blog.py`, and the 5-gate Blog
+`claude-blog` scores every post through `claude-blog/scripts/analyze_blog.py`, and the 5-gate Blog
 Delivery Contract blocks any draft scoring below 90/100. That scoring is **language-gated**
 by a `LANGUAGE_PROFILES` dictionary containing exactly two entries: `en` and `tr`. A
 Vietnamese post is silently classified as English, so five of its six profile-driven signals
@@ -174,10 +174,10 @@ Concretely:
 
 | Do | Do not |
 |---|---|
-| `scripts/vi_text.py` - normalization, slug, syllable counting | Inline `unicodedata` calls scattered across three scripts |
-| `scripts/vi_profile.py` - the `LANGUAGE_PROFILES['vi']` payload | A 60-line dict pasted into `analyze_blog.py` |
-| `scripts/vi_prose.py` - AI-tell and register linting | A bullet list of "avoid these phrases" in a SKILL.md |
-| A thin `SKILL.md` that says *"run `scripts/vi_prose.py`"* | A SKILL.md that restates the rules in prose |
+| `claude-blog/scripts/vi_text.py` - normalization, slug, syllable counting | Inline `unicodedata` calls scattered across three scripts |
+| `claude-blog/scripts/vi_profile.py` - the `LANGUAGE_PROFILES['vi']` payload | A 60-line dict pasted into `analyze_blog.py` |
+| `claude-blog/scripts/vi_prose.py` - AI-tell and register linting | A bullet list of "avoid these phrases" in a SKILL.md |
+| A thin `SKILL.md` that says *"run `claude-blog/scripts/vi_prose.py`"* | A SKILL.md that restates the rules in prose |
 
 This is not style preference. It cuts the eventual Codex port from an estimated 6-8 days to
 1-2 days, and it is the difference between rules that are *enforced* and rules that are

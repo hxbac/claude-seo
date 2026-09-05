@@ -191,7 +191,7 @@ Points that are not optional:
    to stderr and proceed. Do not silently spend.
 
 Then update `blog-cannibalization/SKILL.md` to name the wrapper explicitly
-(`scripts/dataforseo_labs.py`) instead of describing a hypothetical one.
+(`claude-blog/scripts/dataforseo_labs.py`) instead of describing a hypothetical one.
 
 ### 4.4 - Correct the cost table
 
@@ -290,17 +290,16 @@ tooling rather than living beside it, and reference it from `DATAFORSEO-SETUP.md
 ## Verification
 
 ```bash
-cd claude-blog
+# from the ai/ workspace root (both repos as subdirectories)
 env -u DATAFORSEO_USERNAME -u DATAFORSEO_LOGIN -u DATAFORSEO_PASSWORD \
-    ../.venv/bin/python scripts/dataforseo_labs.py ranked-keywords https://example.vn
+    .venv/bin/python claude-blog/scripts/dataforseo_labs.py ranked-keywords https://example.vn
 # -> {"error": "missing_credentials", ...}; exit 1
 
-grep -rn "DATAFORSEO_LOGIN\|DATAFORSEO_USERNAME" scripts/ skills/
-../.venv/bin/python -m pytest tests/test_dataforseo_labs.py -v
+grep -rn "DATAFORSEO_LOGIN\|DATAFORSEO_USERNAME" claude-blog/scripts/ claude-blog/skills/
+.venv/bin/python -m pytest claude-blog/tests/test_dataforseo_labs.py -v
 
-cd ../claude-seo
-../.venv/bin/python -c "
-import sys; sys.path.insert(0,'scripts'); import dataforseo_costs as c
+.venv/bin/python -c "
+import sys; sys.path.insert(0,'claude-seo/scripts'); import dataforseo_costs as c
 print(c.estimate('dataforseo_labs_google_keyword_ideas', 1000))   # expect 0.132
 "
 ```
@@ -329,7 +328,7 @@ repositories also disagreed on the credential variable names
 (DATAFORSEO_LOGIN here, DATAFORSEO_USERNAME in claude-seo), so a single
 export could not serve both.
 
-- scripts/dataforseo_labs.py: page_intersection and ranked_keywords,
+- claude-blog/scripts/dataforseo_labs.py: page_intersection and ranked_keywords,
   accepting either credential variable name, structured error on missing
   credentials, credentials never printed
 - Vietnam defaults: location_code 2704, language_code vi

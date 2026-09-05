@@ -31,7 +31,7 @@ ALLOWED_CORE_SCRIPTS = frozenset(
         "bing_webmaster.py", "capture_screenshot.py", "commoncrawl_graph.py",
         "content_humanize.py", "content_quality.py", "content_verify.py",
         "crux_history.py", "dataforseo_costs.py", "dataforseo_merchant.py",
-        "dataforseo_normalize.py", "domain_history.py", "drift_baseline.py",
+        "dataforseo_normalize.py", "dfs_vn_probe.py", "domain_history.py", "drift_baseline.py",
         "drift_compare.py", "drift_history.py", "drift_report.py", "fetch_page.py",
         "ga4_report.py", "gbp_deprecation_lint.py", "google_auth.py",
         "google_report.py", "gsc_inspect.py", "gsc_query.py", "indexing_notify.py",
