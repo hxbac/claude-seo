@@ -354,6 +354,26 @@ Two real boundaries worth being upfront about.
 - Optional: Playwright Chromium — install.sh offers to install it (you can skip the prompt); needed only for SPA rendering and screenshots
 - Optional: Google API credentials for enriched CWV / GSC / GA4 data (see `/seo google setup`)
 
+### API Credentials
+
+`scripts/env_file.py` loads every key from one `.env` file, shared with claude-blog, so
+nothing has to be exported by hand:
+
+```bash
+cp .env.example ~/.claude/.env
+chmod 600 ~/.claude/.env
+python3 scripts/env_file.py --check
+```
+
+Search order is `$CLAUDE_ENV_FILE`, then `~/.claude/.env`, then `<repo>/.env`. A variable
+already exported in the shell always wins, parsing is literal (no shell expansion, no inline
+comments), and values are never printed or logged.
+
+`DATAFORSEO_USERNAME` and `DATAFORSEO_PASSWORD` unlock keyword and competitor research.
+Verify the account for free first with `python3 scripts/dfs_vn_probe.py`, which calls only
+free endpoints. See [`.env.example`](.env.example) for every supported variable.
+
+
 ## Uninstall
 
 ```bash
