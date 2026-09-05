@@ -28,6 +28,13 @@ import sys
 import urllib.error
 import urllib.request
 
+# Credentials come from a .env file so they never have to be typed on a command
+# line. See scripts/env_file.py for the search order.
+_ENV_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _ENV_SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _ENV_SCRIPT_DIR)
+import env_file  # noqa: E402,F401
+
 BASE = "https://api.dataforseo.com"
 VN_CODE = 2704
 VN_LANG = "vi"

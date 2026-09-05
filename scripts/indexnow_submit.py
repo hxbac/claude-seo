@@ -50,6 +50,13 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 from url_safety import URLSafetyError, safe_requests_get, validate_url_strict  # noqa: E402
 
+# Credentials come from a .env file so they never have to be typed on a command
+# line. See scripts/env_file.py for the search order.
+_ENV_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _ENV_SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _ENV_SCRIPT_DIR)
+import env_file  # noqa: E402,F401
+
 # The umbrella endpoint forwards to every participating engine. Individual
 # engine endpoints exist, but api.indexnow.org dispatches automatically.
 # One POST covers all six listed IndexNow participants.
