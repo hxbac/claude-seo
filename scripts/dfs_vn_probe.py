@@ -5,9 +5,9 @@ dfs_vn_probe.py -- Kiem tra tai khoan DataForSEO cho thi truong Viet Nam.
 CHI GOI CAC ENDPOINT MIEN PHI ($0.00):
   /v3/appendix/user_data                        -> so du, rate limit, gia thuc te
   /v3/dataforseo_labs/locations_and_languages   -> Labs co ho tro VN/vi khong
-  /v3/keywords_data/google_ads/locations        -> Keyword Planner co VN khong
+  /v3/keywords_data/google_ads/locations/vn     -> Keyword Planner co VN khong
   /v3/keywords_data/google_ads/languages        -> co tieng Viet khong
-  /v3/serp/google/organic/locations             -> so location VN cho SERP
+  /v3/serp/google/locations/vn                  -> so location VN cho SERP
 
 Bien moi truong (chap nhan ca 2 kieu ten vi claude-seo va claude-blog dat khac nhau):
   DATAFORSEO_USERNAME / DATAFORSEO_LOGIN
@@ -37,6 +37,7 @@ import env_file  # noqa: E402,F401
 
 BASE = "https://api.dataforseo.com"
 VN_CODE = 2704
+VN_ISO = "vn"
 VN_LANG = "vi"
 TIMEOUT = 45
 
@@ -75,12 +76,23 @@ def call(path: str, user: str, pwd: str) -> dict:
     )
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            return json.loads(resp.read().decode())
+            payload = json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
         body = exc.read().decode(errors="replace")[:400]
         return {"_error": f"HTTP {exc.code}", "_body": body}
     except Exception as exc:  # noqa: BLE001 - bao cao moi loi mang cho nguoi dung
         return {"_error": type(exc).__name__, "_body": str(exc)[:400]}
+    # DataForSEO tra HTTP 200 ngay ca khi task that bai: loi that nam o
+    # tasks[0].status_code (vd 40402 Invalid Path, 40501 Invalid Field). Khong
+    # kiem tra o day thi endpoint sai se im lang thanh "khong ho tro VN".
+    task = (payload.get("tasks") or [{}])[0]
+    status = task.get("status_code")
+    if isinstance(status, int) and status >= 40000:
+        return {
+            "_error": f"task {status}",
+            "_body": str(task.get("status_message"))[:400],
+        }
+    return payload
 
 
 def first_result(payload: dict) -> list:
@@ -103,8 +115,15 @@ def probe(user: str, pwd: str) -> dict:
             "login": res.get("login"),
             "balance_usd": res.get("money", {}).get("balance"),
             "spent_total_usd": res.get("money", {}).get("total"),
-            "limit_per_minute": res.get("rates", {}).get("limits", {}).get("minute"),
-            "limit_per_day": res.get("rates", {}).get("limits", {}).get("day"),
+            # rates.limits.minute / .day la dict long nhau theo tung endpoint;
+            # chi so tong nam o khoa "total". Lay ca dict ra se in nguyen mot
+            # khoi JSON vai nghin ky tu vao ban tom tat.
+            "limit_per_minute": (
+                res.get("rates", {}).get("limits", {}).get("minute", {}).get("total")
+            ),
+            "limit_per_day": (
+                res.get("rates", {}).get("limits", {}).get("day", {}).get("total")
+            ),
         }
         # Gia thuc te ap cho tai khoan nay (neu API tra ve)
         prices = res.get("price") or {}
@@ -136,7 +155,9 @@ def probe(user: str, pwd: str) -> dict:
         }
 
     # 3. Keyword Planner (Google Ads) co VN khong
-    data = call(f"/v3/keywords_data/google_ads/locations/{VN_CODE}", user, pwd)
+    # Endpoint nay nhan ma ISO quoc gia ("vn"), khong phai location_code (2704).
+    # Truyen 2704 tra ve task 40501 Invalid Field: 'country'.
+    data = call(f"/v3/keywords_data/google_ads/locations/{VN_ISO}", user, pwd)
     if "_error" in data:
         data = call("/v3/keywords_data/google_ads/locations", user, pwd)
     if "_error" in data:
@@ -159,7 +180,8 @@ def probe(user: str, pwd: str) -> dict:
         out["google_ads_vietnamese"] = {"supported": bool(vi), "sample": vi[:1]}
 
     # 4. SERP co bao nhieu diem dia ly VN (cho local SEO)
-    data = call("/v3/serp/google/organic/locations/vn", user, pwd)
+    # Location list nam o cap /serp/google/, khong phai duoi /organic/.
+    data = call(f"/v3/serp/google/locations/{VN_ISO}", user, pwd)
     if "_error" in data:
         out["errors"].append({"step": "serp_locations_vn", **data})
     else:
