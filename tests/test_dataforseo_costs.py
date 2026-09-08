@@ -76,3 +76,41 @@ def test_cli_estimate_reports_task_plus_item_breakdown(capsys) -> None:
     assert result["total_cost_usd"] == pytest.approx(0.132)
     assert result["per_task_usd"] == pytest.approx(0.012)
     assert result["per_item_usd"] == pytest.approx(0.00012)
+
+
+# ---------------------------------------------------------------------------
+# Phase C: cost log entries carry the credential slot that paid for the call
+# ---------------------------------------------------------------------------
+
+class TestSlotField:
+    def _isolate_ledger(self, tmp_path, monkeypatch):
+        ledger_file = tmp_path / "ledger.json"
+        monkeypatch.setattr(dfc, "CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(dfc, "LEDGER_FILE", ledger_file)
+        return ledger_file
+
+    def test_log_defaults_slot_to_1(self, tmp_path, monkeypatch, capsys):
+        self._isolate_ledger(tmp_path, monkeypatch)
+        args = argparse.Namespace(endpoint="serp_organic_live_advanced", cost=0.002, note=None, slot=1)
+        dfc.cmd_log(args)
+        out = json.loads(capsys.readouterr().out)
+        assert out["entry"]["slot"] == 1
+
+    def test_log_records_explicit_slot_after_rotation(self, tmp_path, monkeypatch, capsys):
+        self._isolate_ledger(tmp_path, monkeypatch)
+        args = argparse.Namespace(endpoint="serp_organic_live_advanced", cost=0.002, note=None, slot=2)
+        dfc.cmd_log(args)
+        out = json.loads(capsys.readouterr().out)
+        assert out["entry"]["slot"] == 2
+
+    def test_old_entries_without_a_slot_field_still_parse_in_summary(self, tmp_path, monkeypatch, capsys):
+        ledger_file = self._isolate_ledger(tmp_path, monkeypatch)
+        ledger_file.write_text(json.dumps({
+            "entries": [
+                {"timestamp": dfc.datetime.now().isoformat(), "endpoint": "old_endpoint", "cost": 0.05},
+            ]
+        }))
+        args = argparse.Namespace(days=7)
+        dfc.cmd_summary(args)
+        out = json.loads(capsys.readouterr().out)
+        assert out["slot_totals"]["1"]["calls"] == 1

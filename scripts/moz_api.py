@@ -38,6 +38,10 @@ except ImportError:
     print("Error: backlinks_auth.py and google_auth.py required in scripts/", file=sys.stderr)
     sys.exit(1)
 
+# Credentials come from a .env file so they never have to be typed on a command
+# line. See scripts/env_file.py for the search order.
+import env_file  # noqa: E402,F401
+
 MOZ_BASE = "https://api.moz.com"
 # Legacy JSON-RPC endpoint was deprecated; Moz migrated to v2 REST.
 # All four legacy methods map to dedicated v2 REST paths.
@@ -344,6 +348,61 @@ def get_top_pages(domain: str, api_key: str, limit: int = 50) -> dict:
     return result
 
 
+def _is_rotatable_moz_result(result: dict) -> bool:
+    """True when a Moz response dict represents a rotatable credential rejection.
+
+    _moz_request() never raises for an ordinary API rejection; it always
+    returns the standard result dict with a status of "rate_limited" or
+    "error". This turns the two credential-shaped cases -- rate limited,
+    and an invalid or under-permissioned key -- into something rotate()
+    can classify, while leaving every other error (timeout, bad request,
+    network failure) to propagate as-is and not burn through key slots.
+    """
+    if result.get("status") == "rate_limited":
+        return True
+    error = result.get("error") or ""
+    return "Invalid Moz API key" in error or "access denied" in error
+
+
+def _run_moz_rotated(call_with_key) -> dict:
+    """Run `call_with_key(api_key)` through env_file.rotate("moz", ...).
+
+    `call_with_key` must return the standard Moz result dict shape. Falls
+    back to backlinks_auth.get_moz_api_key() (which also reads the
+    ~/.config/claude-seo/backlinks-api.json config file) when no
+    MOZ_API_KEY-family environment variable is configured at all, so a
+    config-file-only setup keeps working exactly as before rotation
+    existed. AllSlotsFailed becomes the same result shape a rejected key
+    already produced, rather than a raw exception.
+    """
+
+    def attempt(slot: env_file.Slot) -> dict:
+        result = call_with_key(slot.values["MOZ_API_KEY"])
+        if _is_rotatable_moz_result(result):
+            raise env_file.RotatableError(result.get("error") or "Moz request rejected")
+        return result
+
+    try:
+        return env_file.rotate("moz", attempt)
+    except env_file.CredentialsMissing:
+        api_key = get_moz_api_key()
+        if not api_key:
+            return {
+                "status": "error",
+                "data": None,
+                "error": "No Moz API key configured. Run: python scripts/backlinks_auth.py --setup",
+                "metadata": {"source": "moz"},
+            }
+        return call_with_key(api_key)
+    except env_file.AllSlotsFailed as exc:
+        return {
+            "status": "error",
+            "data": None,
+            "error": str(exc),
+            "metadata": {"source": "moz", "all_slots_failed": True},
+        }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Moz Link Explorer API client for Claude SEO"
@@ -387,32 +446,27 @@ def main():
                 print(f"Error: {result['error']}", file=sys.stderr)
             sys.exit(1)
 
-    # Get API key
-    api_key = get_moz_api_key()
-    if not api_key:
-        result = {
-            "status": "error",
-            "data": None,
-            "error": "No Moz API key configured. Run: python scripts/backlinks_auth.py --setup",
-            "metadata": {"source": "moz"},
-        }
+    # Execute command, rotating across MOZ_API_KEY slots on a rejected key.
+    if args.command == "metrics":
+        result = _run_moz_rotated(lambda key: get_url_metrics(target, key))
+    elif args.command == "domains":
+        result = _run_moz_rotated(lambda key: get_linking_domains(target, key, limit=args.limit))
+    elif args.command == "anchors":
+        result = _run_moz_rotated(lambda key: get_anchor_text(target, key, limit=args.limit))
+    elif args.command == "pages":
+        result = _run_moz_rotated(lambda key: get_top_pages(target, key, limit=args.limit))
+    else:
+        result = {"status": "error", "data": None, "error": f"Unknown command: {args.command}"}
+
+    if "No Moz API key configured" in (result.get("error") or ""):
+        # Preserve the historical CLI contract: no key configured at all
+        # exits non-zero even in --json mode, exactly like before rotation
+        # was wired in.
         if args.json:
             print(json.dumps(result, indent=2))
         else:
             print(f"Error: {result['error']}", file=sys.stderr)
         sys.exit(1)
-
-    # Execute command
-    if args.command == "metrics":
-        result = get_url_metrics(target, api_key)
-    elif args.command == "domains":
-        result = get_linking_domains(target, api_key, limit=args.limit)
-    elif args.command == "anchors":
-        result = get_anchor_text(target, api_key, limit=args.limit)
-    elif args.command == "pages":
-        result = get_top_pages(target, api_key, limit=args.limit)
-    else:
-        result = {"status": "error", "data": None, "error": f"Unknown command: {args.command}"}
 
     # Output
     if args.json:

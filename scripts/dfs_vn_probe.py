@@ -67,7 +67,28 @@ def creds() -> tuple[str, str]:
     return user, pwd
 
 
-def call(path: str, user: str, pwd: str) -> dict:
+def _raise_on_task_status(payload: dict) -> None:
+    """Raise RotatableError for a rotatable DataForSEO task failure.
+
+    DataForSEO tra HTTP 200 ngay ca khi task that bai: loi that nam o
+    tasks[0].status_code. 40100-40399 (auth, payment, quota) la loi
+    credential nen chuyen sang slot ke tiep. 40400 (Invalid Path) va 40501
+    (Invalid Field) la loi request, khong phai loi credential, va khong
+    duoc phep rotate: rotate se bien mot loi ro rang thanh thong bao
+    "het key" gay hieu lam. Chinh vi da co bug endpoint sai bi bao nham
+    thanh "khong ho tro VN" nen ham nay tach rieng, dung chung cho ca hai
+    duong goi (rotate-classification o day, va bao cao _error o call()).
+    """
+    task = (payload.get("tasks") or [{}])[0]
+    status = task.get("status_code")
+    if not isinstance(status, int) or status < 40000:
+        return
+    message = str(task.get("status_message"))
+    if 40100 <= status < 40400:
+        raise env_file.RotatableError(f"task {status}: {message}")
+
+
+def _http_call(path: str, user: str, pwd: str) -> dict:
     token = base64.b64encode(f"{user}:{pwd}".encode()).decode()
     req = urllib.request.Request(
         f"{BASE}{path}",
@@ -78,6 +99,8 @@ def call(path: str, user: str, pwd: str) -> dict:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
             payload = json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
+        if exc.code in env_file.ROTATABLE_HTTP_STATUS:
+            raise env_file.RotatableError(f"HTTP {exc.code}") from exc
         body = exc.read().decode(errors="replace")[:400]
         return {"_error": f"HTTP {exc.code}", "_body": body}
     except Exception as exc:  # noqa: BLE001 - bao cao moi loi mang cho nguoi dung
@@ -85,6 +108,7 @@ def call(path: str, user: str, pwd: str) -> dict:
     # DataForSEO tra HTTP 200 ngay ca khi task that bai: loi that nam o
     # tasks[0].status_code (vd 40402 Invalid Path, 40501 Invalid Field). Khong
     # kiem tra o day thi endpoint sai se im lang thanh "khong ho tro VN".
+    _raise_on_task_status(payload)
     task = (payload.get("tasks") or [{}])[0]
     status = task.get("status_code")
     if isinstance(status, int) and status >= 40000:
@@ -95,6 +119,26 @@ def call(path: str, user: str, pwd: str) -> dict:
     return payload
 
 
+def call(path: str) -> dict:
+    """Goi mot endpoint qua env_file.rotate("dataforseo", ...).
+
+    Credential da duoc kiem tra o creds() truoc khi probe() chay, nen
+    CredentialsMissing o day chi la phong thu. AllSlotsFailed va
+    CredentialsMissing deu tra ve dict co khoa "_error" giong het cac loi
+    khac trong file nay, de probe() khong can biet gi ve rotation.
+    """
+
+    def attempt(slot: env_file.Slot) -> dict:
+        return _http_call(path, slot.values["DATAFORSEO_USERNAME"], slot.values["DATAFORSEO_PASSWORD"])
+
+    try:
+        return env_file.rotate("dataforseo", attempt)
+    except env_file.CredentialsMissing as exc:
+        return {"_error": "missing_credentials", "_body": str(exc)}
+    except env_file.AllSlotsFailed as exc:
+        return {"_error": "all_slots_failed", "_body": str(exc)}
+
+
 def first_result(payload: dict) -> list:
     tasks = payload.get("tasks") or []
     if not tasks:
@@ -102,11 +146,11 @@ def first_result(payload: dict) -> list:
     return tasks[0].get("result") or []
 
 
-def probe(user: str, pwd: str) -> dict:
+def probe() -> dict:
     out: dict = {"errors": []}
 
     # 1. So du + rate limit
-    data = call("/v3/appendix/user_data", user, pwd)
+    data = call("/v3/appendix/user_data")
     if "_error" in data:
         out["errors"].append({"step": "user_data", **data})
     else:
@@ -130,7 +174,7 @@ def probe(user: str, pwd: str) -> dict:
         out["account"]["price_block_present"] = bool(prices)
 
     # 2. Labs co VN + tieng Viet khong (day la cho hay thieu nhat)
-    data = call("/v3/dataforseo_labs/locations_and_languages", user, pwd)
+    data = call("/v3/dataforseo_labs/locations_and_languages")
     if "_error" in data:
         out["errors"].append({"step": "labs_locations", **data})
     else:
@@ -157,9 +201,9 @@ def probe(user: str, pwd: str) -> dict:
     # 3. Keyword Planner (Google Ads) co VN khong
     # Endpoint nay nhan ma ISO quoc gia ("vn"), khong phai location_code (2704).
     # Truyen 2704 tra ve task 40501 Invalid Field: 'country'.
-    data = call(f"/v3/keywords_data/google_ads/locations/{VN_ISO}", user, pwd)
+    data = call(f"/v3/keywords_data/google_ads/locations/{VN_ISO}")
     if "_error" in data:
-        data = call("/v3/keywords_data/google_ads/locations", user, pwd)
+        data = call("/v3/keywords_data/google_ads/locations")
     if "_error" in data:
         out["errors"].append({"step": "google_ads_locations", **data})
     else:
@@ -171,7 +215,7 @@ def probe(user: str, pwd: str) -> dict:
             "vn_rows_total": len(vn),
         }
 
-    data = call("/v3/keywords_data/google_ads/languages", user, pwd)
+    data = call("/v3/keywords_data/google_ads/languages")
     if "_error" in data:
         out["errors"].append({"step": "google_ads_languages", **data})
     else:
@@ -181,7 +225,7 @@ def probe(user: str, pwd: str) -> dict:
 
     # 4. SERP co bao nhieu diem dia ly VN (cho local SEO)
     # Location list nam o cap /serp/google/, khong phai duoi /organic/.
-    data = call(f"/v3/serp/google/locations/{VN_ISO}", user, pwd)
+    data = call(f"/v3/serp/google/locations/{VN_ISO}")
     if "_error" in data:
         out["errors"].append({"step": "serp_locations_vn", **data})
     else:
@@ -262,8 +306,8 @@ def main() -> None:
     ap.add_argument("--json", action="store_true", help="In JSON thay vi ban tom tat")
     args = ap.parse_args()
 
-    user, pwd = creds()
-    out = probe(user, pwd)
+    creds()  # fast fail with the historical structured message
+    out = probe()
     if args.json:
         print(json.dumps(out, ensure_ascii=False, indent=2))
     else:

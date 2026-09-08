@@ -368,12 +368,20 @@ def cmd_check(args):
 
 
 def cmd_log(args):
-    """Log a completed API call cost."""
+    """Log a completed API call cost.
+
+    Rotation (Phase C) changes which account pays for a call, so each entry
+    records which credential slot paid for it. Defaults to 1 -- the only
+    slot a single-key setup ever has -- so a summary walking entries logged
+    before this field existed can still treat a missing "slot" as 1 rather
+    than crashing on a KeyError.
+    """
     ledger = _load_ledger()
     entry = {
         "timestamp": datetime.now().isoformat(),
         "endpoint": args.endpoint,
         "cost": args.cost,
+        "slot": getattr(args, "slot", None) or 1,
     }
     if args.note:
         entry["note"] = args.note
@@ -409,10 +417,25 @@ def cmd_summary(args):
             "calls": len(entries),
         }
 
+    # Rotation (Phase C) means a call can be paid for by any configured
+    # slot. e.get("slot", 1) rather than e["slot"] so an entry logged
+    # before this field existed is reconciled as slot 1, not a KeyError.
+    by_slot: dict = {}
+    for e in recent:
+        slot = e.get("slot", 1)
+        bucket = by_slot.setdefault(slot, {"total_usd": 0.0, "calls": 0})
+        bucket["total_usd"] += e["cost"]
+        bucket["calls"] += 1
+    slot_totals = {
+        str(slot): {"total_usd": round(v["total_usd"], 4), "calls": v["calls"]}
+        for slot, v in sorted(by_slot.items())
+    }
+
     result = {
         "status": "summary",
         "period_days": days,
         "daily_totals": daily_totals,
+        "slot_totals": slot_totals,
         "grand_total_usd": round(sum(e["cost"] for e in recent), 4),
         "total_calls": len(recent),
     }
@@ -535,6 +558,12 @@ def main():
     p_log.add_argument("endpoint", help="DataForSEO MCP tool name")
     p_log.add_argument("cost", type=float, help="Actual cost in USD")
     p_log.add_argument("--note", help="Optional note")
+    p_log.add_argument(
+        "--slot",
+        type=int,
+        default=1,
+        help="Credential slot index that paid for this call (default: 1)",
+    )
 
     # summary
     p_sum = sub.add_parser("summary", help="Show spending summary")
