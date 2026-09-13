@@ -165,6 +165,83 @@ def test_humanize_collapses_extra_spaces_from_deleted_phrases() -> None:
 
 
 # ---------------------------------------------------------------------------
+# content_humanize --lang vi (Phase G, G7)
+# ---------------------------------------------------------------------------
+
+
+def test_humanize_lang_en_default_is_byte_identical_to_before() -> None:
+    """G7 regression bar: an English post's output must be unchanged by
+    the addition of --lang. humanize(text) and humanize(text, lang='en')
+    must match exactly."""
+    text = (
+        "Let's dive into the ever-evolving landscape of SEO. "
+        "In essence, leverage the power of cutting-edge tools."
+    )
+    default_result = content_humanize.humanize(text)
+    explicit_en_result = content_humanize.humanize(text, lang="en")
+    assert default_result == explicit_en_result
+
+
+def test_humanize_vietnamese_seeded_sentence_is_rewritten() -> None:
+    text = (
+        "Công nghệ đóng vai trò vô cùng quan trọng trong đời sống hiện đại, "
+        "và điều này cho thấy rằng chuyển đổi số đã và đang thay đổi doanh nghiệp."
+    )
+    result = content_humanize.humanize(text, lang="vi")
+    assert result["change_count"] >= 3
+    cleaned = result["cleaned"]
+    assert "đóng vai trò vô cùng quan trọng" not in cleaned
+    assert "rất quan trọng" in cleaned
+    assert "đã và đang" not in cleaned
+
+
+def test_humanize_vietnamese_chatbot_residue_removed() -> None:
+    text = "Dưới đây là nội dung chính. Chúc bạn thành công trên hành trình sắp tới."
+    result = content_humanize.humanize(text, lang="vi")
+    assert "chúc bạn thành công" not in result["cleaned"].lower()
+
+
+def test_humanize_vietnamese_unknown_idiom_left_alone() -> None:
+    """Conservative contract: a Vietnamese sentence with no table match
+    passes through unchanged, the same as the English table's guarantee."""
+    text = "Hôm nay trời đẹp và tôi muốn đi dạo quanh hồ."
+    result = content_humanize.humanize(text, lang="vi")
+    assert result["change_count"] == 0
+    assert result["cleaned"] == text
+
+
+def test_humanize_vietnamese_preserves_capitalization_at_sentence_start() -> None:
+    text = "Đóng vai trò vô cùng quan trọng, công nghệ đã thay đổi mọi thứ."
+    result = content_humanize.humanize(text, lang="vi")
+    assert result["cleaned"].startswith("Rất quan trọng"), result["cleaned"]
+
+
+def test_patterns_for_lang_selects_correct_table() -> None:
+    assert content_humanize.patterns_for_lang("vi") is content_humanize._PATTERNS_VI
+    assert content_humanize.patterns_for_lang("en") is content_humanize._PATTERNS_EN
+    assert content_humanize.patterns_for_lang("fr") is content_humanize._PATTERNS_EN
+
+
+def test_cli_lang_vi_flag(tmp_path: Path) -> None:
+    import subprocess
+
+    script = Path(content_humanize.__file__)
+    draft = tmp_path / "draft.md"
+    draft.write_text(
+        "Công nghệ đóng vai trò vô cùng quan trọng trong đời sống hiện đại.",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(script), str(draft), "--lang", "vi", "--json"],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["change_count"] >= 1
+    assert "rất quan trọng" in payload["cleaned"]
+
+
+# ---------------------------------------------------------------------------
 # content_verify
 # ---------------------------------------------------------------------------
 
@@ -317,3 +394,55 @@ def test_seo_updates_filter_by_year() -> None:
     data = seo_updates._load()
     since_2025 = seo_updates._filter(data["updates"], since="2025")
     assert all(u["date"] >= "2025-01-01" for u in since_2025)
+
+
+# ---------------------------------------------------------------------------
+# Phase G review: deletion rules left broken Vietnamese behind
+# ---------------------------------------------------------------------------
+#
+# Several Vietnamese entries delete a phrase rather than swap it. Run over real
+# sentences, the first version produced output worse than its input:
+#
+#   "Chuc ban thanh cong!"                   -> "!"
+#   "Co the noi rang day la buoc ngoat."      -> "day la buoc ngoat."  (lowercase)
+#   "Trong thoi dai so hoa ngay nay, ..."     -> "Hien nay ngay nay, ..."  (redundant)
+#   "Hy vong bai viet nay da mang den cho ..." -> "cho ban nhung ..."  (fragment)
+#
+# A cleanup tool whose output is less grammatical than its input is worse than
+# no tool, because a writer cannot see the damage without rereading everything.
+
+
+def test_vietnamese_signoff_removes_the_whole_sentence():
+    result = content_humanize.humanize(
+        "Chi phí tăng đều.\n\nHy vọng bài viết này đã mang đến cho bạn "
+        "những thông tin hữu ích. Chúc bạn thành công!\n",
+        lang="vi",
+    )
+    cleaned = result["cleaned"].strip()
+    assert cleaned == "Chi phí tăng đều."
+
+
+def test_vietnamese_deletion_recapitalises_the_new_sentence_start():
+    result = content_humanize.humanize(
+        "Có thể nói rằng đây là bước ngoặt.", lang="vi"
+    )
+    assert result["cleaned"].strip() == "Đây là bước ngoặt."
+
+
+def test_vietnamese_deletion_does_not_leave_bare_punctuation():
+    result = content_humanize.humanize("Chúc bạn thành công!", lang="vi")
+    assert result["cleaned"].strip() == ""
+
+
+def test_vietnamese_time_cliche_absorbs_its_trailing_adverbial():
+    result = content_humanize.humanize(
+        "Trong thời đại số hóa ngày nay, ngành bán lẻ thay đổi nhanh.", lang="vi"
+    )
+    assert "ngày nay" not in result["cleaned"]
+    assert result["cleaned"].strip() == "Hiện nay, ngành bán lẻ thay đổi nhanh."
+
+
+def test_english_table_is_untouched_by_the_repair_pass():
+    result = content_humanize.humanize("Let's delve into the ever-evolving landscape of SEO.")
+    assert "delve" not in result["cleaned"]
+    assert result["cleaned"][0].isupper()

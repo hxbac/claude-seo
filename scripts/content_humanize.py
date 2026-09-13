@@ -16,10 +16,16 @@ We diverge from those upstreams only on a handful of phrases where
 their preferred replacement reads less naturally for SEO contexts
 (e.g. "leverage" -> "use", not "employ"). Diff is documented inline.
 
+The Vietnamese table (``--lang vi``, added for Phase G / G7) is original:
+it targets the same category of inflated-register Vietnamese phrasing
+identified in docs/plan/PHASE-G-VIETNAMESE-PARITY.md (G1), not a
+translation of the English table above. Same contract, same conservatism.
+
 CLI::
 
     python scripts/content_humanize.py draft.md -o cleaned.md
     cat draft.md | python scripts/content_humanize.py --json
+    python scripts/content_humanize.py draft.md --lang vi -o cleaned.md
 """
 
 from __future__ import annotations
@@ -34,7 +40,7 @@ from pathlib import Path
 # Patterns are compiled with re.IGNORECASE and \b word boundaries where
 # appropriate. The replacement preserves the original case of the first
 # character (e.g. "Leverage X" -> "Use X", not "use X").
-_REPLACEMENTS: tuple[tuple[str, str, str], ...] = (
+_REPLACEMENTS_EN: tuple[tuple[str, str, str], ...] = (
     (r"\bdelve\s+deeper\s+into\b", "explore", "delve-deeper-into"),
     (r"\bdelve\s+into\b", "explore", "delve-into"),
     (r"\bin\s+the\s+ever-evolving\s+landscape\s+of\b", "in", "ever-evolving-landscape"),
@@ -85,11 +91,63 @@ _REPLACEMENTS: tuple[tuple[str, str, str], ...] = (
     (r"\blet'?s\s+take\s+a\s+(closer|deeper)\s+look\b", "look at", "let-us-take-look"),
 )
 
+# Backward-compatible alias: this was the module's only table before --lang
+# existed. Keep it pointing at the English table so any existing caller
+# that imports _REPLACEMENTS directly keeps getting the same behavior.
+_REPLACEMENTS = _REPLACEMENTS_EN
 
-_PATTERNS = [
-    (re.compile(p, re.IGNORECASE), repl, label)
-    for p, repl, label in _REPLACEMENTS
-]
+# Vietnamese replacement table (Phase G, G7). Same contract as the English
+# table: deterministic 1:1 swaps, conservative, unknown idiom left alone.
+# No \b word-boundary anchors here on purpose: Python's \b is defined over
+# [A-Za-z0-9_], so it can misbehave at the edge of a Vietnamese diacritic
+# letter (the companion claude-blog project's vi_profile module documents
+# the same caution).
+# Vietnamese is written as space-separated syllables, so an unanchored
+# literal phrase match still only lands on syllable boundaries; \s+ between
+# words already does the boundary work \b would otherwise be asked to do.
+_REPLACEMENTS_VI: tuple[tuple[str, str, str], ...] = (
+    (r"trong\s+thời\s+đại\s+số\s+hóa(?:\s+(?:ngày\s+nay|hiện\s+nay))?\s*",
+     "hiện nay ", "trong-thoi-dai-so-hoa"),
+    (r"không\s+thể\s+phủ\s+nhận\s+rằng\s*", "", "khong-the-phu-nhan-rang"),
+    (r"đóng\s+vai\s+trò\s+vô\s+cùng\s+quan\s+trọng", "rất quan trọng", "dong-vai-tro-vo-cung-quan-trong"),
+    (r"mang\s+lại\s+nhiều\s+lợi\s+ích\s+thiết\s+thực", "hữu ích", "mang-lai-loi-ich-thiet-thuc"),
+    (r"giúp\s+bạn\s+dễ\s+dàng\s+hơn\s+bao\s+giờ\s+hết", "giúp bạn dễ dàng hơn", "de-dang-hon-bao-gio-het"),
+    # The whole sentence is the sign off, so consume it to the terminator.
+    # Deleting only the opening clause left the fragment
+    # "cho ban nhung thong tin huu ich." standing on its own.
+    (r"hy\s+vọng\s+bài\s+viết\s+(?:này\s+)?đã\s+mang\s+đến[^.!?]*[.!?]?\s*",
+     "", "hy-vong-bai-viet-da-mang-den"),
+    (r"chúc\s+bạn\s+thành\s+công\s*", "", "chuc-ban-thanh-cong"),
+    (r"điều\s+này\s+cho\s+thấy\s+rằng", "điều này cho thấy", "dieu-nay-cho-thay-rang"),
+    (r"có\s+thể\s+nói\s+rằng\s*", "", "co-the-noi-rang"),
+    (r"một\s+trong\s+những\s+yếu\s+tố\s+quan\s+trọng\s+nhất",
+     "một yếu tố quan trọng", "mot-trong-nhung-yeu-to-quan-trong-nhat"),
+    (r"ngày\s+càng\s+trở\s+nên\s+phổ\s+biến", "ngày càng phổ biến", "ngay-cang-tro-nen-pho-bien"),
+    (r"đã\s+và\s+đang\s+", "đang ", "da-va-dang"),
+    (r"với\s+sự\s+phát\s+triển\s+mạnh\s+mẽ\s+của", "nhờ sự phát triển của", "voi-su-phat-trien-manh-me-cua"),
+    (r"đáp\s+ứng\s+nhu\s+cầu\s+ngày\s+càng\s+cao", "đáp ứng nhu cầu ngày càng lớn", "dap-ung-nhu-cau-ngay-cang-cao"),
+)
+
+
+def _compile_patterns(replacements: tuple[tuple[str, str, str], ...]):
+    return [
+        (re.compile(p, re.IGNORECASE), repl, label)
+        for p, repl, label in replacements
+    ]
+
+
+_PATTERNS_EN = _compile_patterns(_REPLACEMENTS_EN)
+_PATTERNS_VI = _compile_patterns(_REPLACEMENTS_VI)
+
+# Backward-compatible alias, same reasoning as _REPLACEMENTS above.
+_PATTERNS = _PATTERNS_EN
+
+
+def patterns_for_lang(lang: str):
+    """Select the replacement-pattern table for a language. Defaults to
+    English for any value other than 'vi', matching the CLI's --lang
+    default and keeping existing callers unaffected."""
+    return _PATTERNS_VI if lang == "vi" else _PATTERNS_EN
 
 
 def _preserve_case(match_text: str, replacement: str) -> str:
@@ -101,12 +159,47 @@ def _preserve_case(match_text: str, replacement: str) -> str:
     return replacement
 
 
-def humanize(text: str) -> dict:
-    """Apply every replacement; return the cleaned text plus a change log."""
+def _repair_after_deletion(text: str) -> str:
+    """Repair the sentence damage a deletion rule leaves behind.
+
+    Several entries delete a phrase rather than swap it. When that phrase
+    opened the sentence, the deletion leaves a lowercase start; when the
+    phrase WAS the whole sentence, it leaves bare punctuation. Both read as
+    worse Vietnamese than the input, which defeats the point of the tool.
+
+    Found by running the Vietnamese table over real sentences:
+      "Chuc ban thanh cong!"                    -> "!"
+      "Co the noi rang day la buoc ngoat."       -> "day la buoc ngoat."
+      "Khong the phu nhan rang chi phi tang."    -> "chi phi tang."
+
+    Both repairs are mechanical and language neutral, so they run for every
+    table.
+    """
+    # A sentence reduced to nothing but its terminator: drop it entirely.
+    text = re.sub(r"(?m)^[ \t]*[.!?;:,]+[ \t]*$", "", text)
+    text = re.sub(r"(?<=[.!?])\s+[.!?;:,]+(?=\s|$)", "", text)
+    text = re.sub(r"^[ \t]*[.!?;:,]+[ \t]*", "", text)
+
+    # Recapitalise whatever now starts a sentence or a line.
+    def _upper(match: "re.Match[str]") -> str:
+        return match.group(0).upper()
+
+    text = re.sub(r"(?m)(?<=^)[a-zà-ỹ]", _upper, text)
+    text = re.sub(r"(?<=[.!?]\s)[a-zà-ỹ]", _upper, text)
+    return text
+
+
+def humanize(text: str, lang: str = "en") -> dict:
+    """Apply every replacement; return the cleaned text plus a change log.
+
+    `lang` selects the replacement table ("en" default, "vi" for the
+    Vietnamese table added in Phase G / G7). Same contract either way:
+    deterministic 1:1 swaps, conservative, unknown idiom left alone.
+    """
     changes: list[dict] = []
     cleaned = text
 
-    for pattern, replacement, label in _PATTERNS:
+    for pattern, replacement, label in patterns_for_lang(lang):
         def _repl(match):
             original = match.group(0)
             new = _preserve_case(original, replacement)
@@ -122,6 +215,7 @@ def humanize(text: str) -> dict:
     # newlines and intentional spacing alone.
     cleaned = re.sub(r"  +", " ", cleaned)
     cleaned = re.sub(r" ([,.;:!?])", r"\1", cleaned)
+    cleaned = _repair_after_deletion(cleaned)
 
     return {
         "cleaned": cleaned,
@@ -141,6 +235,8 @@ def main() -> int:
     parser.add_argument("--output", "-o", help="Write cleaned text to this path.")
     parser.add_argument("--json", action="store_true",
                         help="Emit JSON with cleaned text + change log.")
+    parser.add_argument("--lang", choices=["en", "vi"], default="en",
+                        help="Replacement table language (default en).")
     args = parser.parse_args()
 
     if args.source == "-":
@@ -148,7 +244,7 @@ def main() -> int:
     else:
         text = Path(args.source).read_text(encoding="utf-8", errors="replace")
 
-    result = humanize(text)
+    result = humanize(text, lang=args.lang)
 
     if args.json:
         json.dump(result, sys.stdout, indent=2)
