@@ -30,6 +30,8 @@ The Vietnamese table (``--lang vi``, added for Phase G / G7) is original:
 it targets the same category of inflated-register Vietnamese phrasing
 identified in docs/plan/PHASE-G-VIETNAMESE-PARITY.md (G1), not a
 translation of the English table above. Same contract, same conservatism.
+Since Phase J it is a GENERATED copy (vi_tells_generated.py) of the single
+list in claude-blog's vi_profile.py; never edit it in this repository.
 
 CLI::
 
@@ -107,37 +109,25 @@ _REPLACEMENTS_EN: tuple[tuple[str, str, str], ...] = (
 # that imports _REPLACEMENTS directly keeps getting the same behavior.
 _REPLACEMENTS = _REPLACEMENTS_EN
 
-# Vietnamese replacement table (Phase G, G7). Same contract as the English
-# table: deterministic 1:1 swaps, conservative, unknown idiom left alone.
-# No \b word-boundary anchors here on purpose: Python's \b is defined over
-# [A-Za-z0-9_], so it can misbehave at the edge of a Vietnamese diacritic
-# letter (the companion claude-blog project's vi_profile module documents
-# the same caution).
-# Vietnamese is written as space-separated syllables, so an unanchored
-# literal phrase match still only lands on syllable boundaries; \s+ between
+# Vietnamese replacement table (Phase G, G7; single-sourced in Phase J).
+# Same contract as the English table: deterministic 1:1 swaps, conservative,
+# unknown idiom left alone. The table is NOT edited here. It is generated from
+# claude-blog's vi_profile.py (VI_TELLS), the one list of Vietnamese lexical
+# tells, into vi_tells_generated.py next to this file; a test compares the two.
+# To change a Vietnamese phrase, edit vi_profile.py in the claude-blog
+# repository and run its sync_vi_tells.py with --write.
+#
+# No \b word-boundary anchors in the table on purpose: Python's \b is defined
+# over [A-Za-z0-9_], so it can misbehave at the edge of a Vietnamese diacritic
+# letter. Vietnamese is written as space-separated syllables, so \s+ between
 # words already does the boundary work \b would otherwise be asked to do.
-_REPLACEMENTS_VI: tuple[tuple[str, str, str], ...] = (
-    (r"trong\s+thời\s+đại\s+số\s+hóa(?:\s+(?:ngày\s+nay|hiện\s+nay))?\s*",
-     "hiện nay ", "trong-thoi-dai-so-hoa"),
-    (r"không\s+thể\s+phủ\s+nhận\s+rằng\s*", "", "khong-the-phu-nhan-rang"),
-    (r"đóng\s+vai\s+trò\s+vô\s+cùng\s+quan\s+trọng", "rất quan trọng", "dong-vai-tro-vo-cung-quan-trong"),
-    (r"mang\s+lại\s+nhiều\s+lợi\s+ích\s+thiết\s+thực", "hữu ích", "mang-lai-loi-ich-thiet-thuc"),
-    (r"giúp\s+bạn\s+dễ\s+dàng\s+hơn\s+bao\s+giờ\s+hết", "giúp bạn dễ dàng hơn", "de-dang-hon-bao-gio-het"),
-    # The whole sentence is the sign off, so consume it to the terminator.
-    # Deleting only the opening clause left the fragment
-    # "cho ban nhung thong tin huu ich." standing on its own.
-    (r"hy\s+vọng\s+bài\s+viết\s+(?:này\s+)?đã\s+mang\s+đến[^.!?]*[.!?]?\s*",
-     "", "hy-vong-bai-viet-da-mang-den"),
-    (r"chúc\s+bạn\s+thành\s+công\s*", "", "chuc-ban-thanh-cong"),
-    (r"điều\s+này\s+cho\s+thấy\s+rằng", "điều này cho thấy", "dieu-nay-cho-thay-rang"),
-    (r"có\s+thể\s+nói\s+rằng\s*", "", "co-the-noi-rang"),
-    (r"một\s+trong\s+những\s+yếu\s+tố\s+quan\s+trọng\s+nhất",
-     "một yếu tố quan trọng", "mot-trong-nhung-yeu-to-quan-trong-nhat"),
-    (r"ngày\s+càng\s+trở\s+nên\s+phổ\s+biến", "ngày càng phổ biến", "ngay-cang-tro-nen-pho-bien"),
-    (r"đã\s+và\s+đang\s+", "đang ", "da-va-dang"),
-    (r"với\s+sự\s+phát\s+triển\s+mạnh\s+mẽ\s+của", "nhờ sự phát triển của", "voi-su-phat-trien-manh-me-cua"),
-    (r"đáp\s+ứng\s+nhu\s+cầu\s+ngày\s+càng\s+cao", "đáp ứng nhu cầu ngày càng lớn", "dap-ung-nhu-cau-ngay-cang-cao"),
-)
+import os as _os
+import sys as _sys
+
+_HERE = _os.path.dirname(_os.path.abspath(__file__))
+if _HERE not in _sys.path:
+    _sys.path.insert(0, _HERE)
+from vi_tells_generated import VI_REWRITES as _REPLACEMENTS_VI  # noqa: E402
 
 
 def _compile_patterns(replacements: tuple[tuple[str, str, str], ...]):
@@ -347,6 +337,9 @@ def humanize(text: str, lang: str = "en") -> dict:
     # newlines and intentional spacing alone.
     cleaned = re.sub(r"  +", " ", cleaned)
     cleaned = re.sub(r" ([,.;:!?])", r"\1", cleaned)
+    if lang == "vi":
+        # A deleted trailing sign-off leaves "text. " before the line break.
+        cleaned = re.sub(r"[ \t]+(?=\n|\Z)", "", cleaned)
     cleaned = _repair_after_deletion(cleaned)
 
     return {

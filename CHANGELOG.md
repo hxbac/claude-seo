@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `content_humanize.py --lang vi` now uses a generated copy of the Vietnamese
+  tell table (`vi_tells_generated.py`, header "do not edit") produced from
+  claude-blog's single list in `vi_profile.py`. Tests fail on a hand edit or on
+  drift from the source.
+
+### Fixed
+
+- `content_humanize.py --lang vi` no longer leaves `.!` after deleting
+  "Chúc bạn thành công!", handles "hy vọng bài viết này sẽ hữu ích" as well as
+  "hy vọng bài viết đã mang đến", and keeps the trailing line break.
+
 ## [2.4.1] - 2026-09-29
 
 Google-currency patch. Every changed fact was re-checked against its
