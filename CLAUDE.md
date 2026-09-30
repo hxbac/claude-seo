@@ -90,7 +90,7 @@ claude-seo/
     seo-flow.md                  # FLOW framework integration
   hooks/                           # Quality gate hooks
     hooks.json                   # PostToolUse schema validation
-  scripts/                         # 64 Python execution scripts
+  scripts/                         # 62 Python execution scripts
     env_file.py                  # Shared credentials file loader with multi-slot key rotation
     dfs_vn_probe.py              # DataForSEO Vietnam (location 2704, vi) endpoint probe
     google_auth.py               # Credential management (OAuth, SA, API key, 4-tier detection)
