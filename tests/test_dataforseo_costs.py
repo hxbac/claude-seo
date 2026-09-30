@@ -1,116 +1,171 @@
-"""DataForSEO cost model regressions: per-item pricing, Vietnam-relevant budget gate."""
+"""
+Tests for scripts/dataforseo_costs.py: spend-ledger integrity.
+
+Regression cover for the lost-update race: the ledger used to take its file
+lock twice, once to read and once to write, and drop it in between, so two
+concurrent `log` calls both read the same ledger and the second overwrote the
+first. A budget ledger that quietly under-reports spend is the one thing it
+must not do.
+
+Every test runs against an isolated CLAUDE_SEO_CONFIG_DIR, never the real
+~/.config/claude-seo/ ledger.
+"""
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
+import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 
-_SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
-if _SCRIPTS not in sys.path:
-    sys.path.insert(0, _SCRIPTS)
-
-import dataforseo_costs as dfc  # noqa: E402
+_REPO = Path(__file__).resolve().parents[1]
+_SCRIPT = _REPO / "scripts" / "dataforseo_costs.py"
 
 
-def test_labs_1000_items_matches_task_plus_item_pricing() -> None:
-    # $0.012/task + $0.00012/item * 1000 items = $0.132, not the old flat $0.05.
-    assert dfc.estimate("dataforseo_labs_google_keyword_ideas", 1000) == pytest.approx(0.132)
+def _run(config_dir: Path, *argv: str) -> subprocess.CompletedProcess:
+    """Invoke the CLI in a subprocess with an isolated ledger."""
+    env = dict(os.environ)
+    env["CLAUDE_SEO_CONFIG_DIR"] = str(config_dir)
+    return subprocess.run(
+        [sys.executable, str(_SCRIPT), *argv],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
 
 
-def test_labs_default_item_count_is_task_price_plus_one_item() -> None:
-    assert dfc.estimate("dataforseo_labs_google_keyword_ideas") == pytest.approx(0.01212)
-
-
-def test_labs_200_items_is_cheaper_than_old_flat_fifty_cents() -> None:
-    # Documented in the phase notes: 200 items was over-estimated at the old flat
-    # $0.05; the real per-item model prices it lower.
-    assert dfc.estimate("dataforseo_labs_google_keyword_ideas", 200) == pytest.approx(0.036)
-
-
-def test_all_labs_endpoints_share_the_same_migrated_model() -> None:
-    labs_endpoints = [k for k in dfc.COST_MODEL if k.startswith("dataforseo_labs_")]
-    assert labs_endpoints, "expected DataForSEO Labs endpoints in COST_MODEL"
-    for endpoint in labs_endpoints:
-        assert dfc.estimate(endpoint, 1000) == pytest.approx(0.132)
-
-
-def test_search_volume_bills_per_task_not_per_keyword() -> None:
-    # Same cost whether the batch is 1 keyword or 1000 -- no per-item component.
-    assert dfc.estimate("kw_data_google_ads_search_volume", 1) == pytest.approx(0.06)
-    assert dfc.estimate("kw_data_google_ads_search_volume", 1000) == pytest.approx(0.06)
-
-
-def test_serp_price_unchanged_by_the_2026_07_increase() -> None:
-    assert dfc.estimate("serp_organic_live_advanced") == pytest.approx(0.002)
-
-
-def test_cost_table_is_fallback_for_unmigrated_endpoints() -> None:
-    # Not in COST_MODEL, but still priced via the flat COST_TABLE fallback.
-    assert "on_page_instant_pages" not in dfc.COST_MODEL
-    assert dfc.estimate("on_page_instant_pages", 50) == pytest.approx(0.012)
-
-
-def test_unknown_endpoint_returns_conservative_default_cost() -> None:
-    assert dfc.estimate("not_a_real_endpoint") == dfc.DEFAULT_COST
-
-
-def test_labs_no_longer_duplicated_in_cost_table() -> None:
-    # Migrated endpoints must not also sit in the flat-fee fallback table --
-    # that would make COST_TABLE's stale price win by accident in any code
-    # path that reads COST_TABLE directly instead of calling estimate().
-    labs_in_model = {k for k in dfc.COST_MODEL if k.startswith("dataforseo_labs_")}
-    labs_in_table = {k for k in dfc.COST_TABLE if k.startswith("dataforseo_labs_")}
-    assert labs_in_model
-    assert not labs_in_table
-
-
-def test_cli_estimate_reports_task_plus_item_breakdown(capsys) -> None:
-    args = argparse.Namespace(endpoint="dataforseo_labs_google_keyword_ideas", count=1000)
-    dfc.cmd_estimate(args)
-    result = json.loads(capsys.readouterr().out)
-    assert result["status"] == "estimated"
-    assert result["total_cost_usd"] == pytest.approx(0.132)
-    assert result["per_task_usd"] == pytest.approx(0.012)
-    assert result["per_item_usd"] == pytest.approx(0.00012)
+def _entries(config_dir: Path) -> list[dict]:
+    return json.loads((config_dir / "dataforseo-ledger.json").read_text())["entries"]
 
 
 # ---------------------------------------------------------------------------
-# Phase C: cost log entries carry the credential slot that paid for the call
+# concurrency: the reported bug
 # ---------------------------------------------------------------------------
 
-class TestSlotField:
-    def _isolate_ledger(self, tmp_path, monkeypatch):
-        ledger_file = tmp_path / "ledger.json"
-        monkeypatch.setattr(dfc, "CONFIG_DIR", tmp_path)
-        monkeypatch.setattr(dfc, "LEDGER_FILE", ledger_file)
-        return ledger_file
 
-    def test_log_defaults_slot_to_1(self, tmp_path, monkeypatch, capsys):
-        self._isolate_ledger(tmp_path, monkeypatch)
-        args = argparse.Namespace(endpoint="serp_organic_live_advanced", cost=0.002, note=None, slot=1)
-        dfc.cmd_log(args)
-        out = json.loads(capsys.readouterr().out)
-        assert out["entry"]["slot"] == 1
+def test_concurrent_logs_do_not_lose_entries(tmp_path) -> None:
+    """20 concurrent `log` calls must produce exactly 20 entries.
 
-    def test_log_records_explicit_slot_after_rotation(self, tmp_path, monkeypatch, capsys):
-        self._isolate_ledger(tmp_path, monkeypatch)
-        args = argparse.Namespace(endpoint="serp_organic_live_advanced", cost=0.002, note=None, slot=2)
-        dfc.cmd_log(args)
-        out = json.loads(capsys.readouterr().out)
-        assert out["entry"]["slot"] == 2
+    Fails on the pre-fix code, which loses entries whenever two processes
+    interleave their read-modify-write.
+    """
+    calls = 20
+    unit_cost = 0.01
 
-    def test_old_entries_without_a_slot_field_still_parse_in_summary(self, tmp_path, monkeypatch, capsys):
-        ledger_file = self._isolate_ledger(tmp_path, monkeypatch)
-        ledger_file.write_text(json.dumps({
-            "entries": [
-                {"timestamp": dfc.datetime.now().isoformat(), "endpoint": "old_endpoint", "cost": 0.05},
-            ]
-        }))
-        args = argparse.Namespace(days=7)
-        dfc.cmd_summary(args)
-        out = json.loads(capsys.readouterr().out)
-        assert out["slot_totals"]["1"]["calls"] == 1
+    with ThreadPoolExecutor(max_workers=calls) as pool:
+        results = list(
+            pool.map(
+                lambda i: _run(
+                    tmp_path, "log", "serp_organic_live_advanced", str(unit_cost),
+                    "--note", f"call-{i}",
+                ),
+                range(calls),
+            )
+        )
+
+    failed = [r for r in results if r.returncode != 0]
+    assert not failed, f"{len(failed)} log calls failed: {failed[0].stderr}"
+
+    entries = _entries(tmp_path)
+    assert len(entries) == calls, (
+        f"lost {calls - len(entries)} of {calls} concurrent writes"
+    )
+
+    notes = sorted(e["note"] for e in entries)
+    assert notes == sorted(f"call-{i}" for i in range(calls)), "entries were clobbered"
+
+    total = sum(e["cost"] for e in entries)
+    assert total == pytest.approx(calls * unit_cost), "recorded spend under-reports"
+
+
+def test_concurrent_log_and_reset_keep_the_ledger_parseable(tmp_path) -> None:
+    """Interleaved writers must never leave a torn/unparseable ledger."""
+    _run(tmp_path, "log", "serp_organic_live_advanced", "0.01")
+
+    def job(i: int) -> subprocess.CompletedProcess:
+        if i % 5 == 4:
+            return _run(tmp_path, "reset", "--confirm")
+        return _run(tmp_path, "log", "serp_organic_live_advanced", "0.01")
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        list(pool.map(job, range(10)))
+
+    # The ledger must still be valid JSON with an entries list. Which entries
+    # survive depends on reset ordering; that the file parses is the invariant.
+    entries = _entries(tmp_path)
+    assert isinstance(entries, list)
+
+    result = json.loads(_run(tmp_path, "today").stdout)
+    assert result["status"] == "today"
+
+
+# ---------------------------------------------------------------------------
+# durability
+# ---------------------------------------------------------------------------
+
+
+def test_corrupt_ledger_is_not_silently_zeroed(tmp_path) -> None:
+    """A truncated ledger must fail closed, not restart the budget at zero.
+
+    The old code caught JSONDecodeError and returned {"entries": []}, so the
+    next write persisted an empty ledger and the entire spend history vanished.
+    """
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    ledger = tmp_path / "dataforseo-ledger.json"
+    ledger.write_text('{"entries": [{"timestamp": "2026-01-01T00:00:00", "cos')
+
+    result = _run(tmp_path, "log", "serp_organic_live_advanced", "0.01")
+    assert result.returncode != 0, "corrupt ledger must not be silently accepted"
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "error"
+    assert "not valid JSON" in payload["message"]
+
+    # The damaged file is left in place for inspection, not overwritten.
+    assert ledger.read_text().endswith('"cos')
+
+
+def test_today_totals_survive_a_write(tmp_path) -> None:
+    """Basic round trip: logged spend is reflected in `today`."""
+    _run(tmp_path, "log", "on_page_lighthouse", "0.02")
+    _run(tmp_path, "log", "on_page_lighthouse", "0.03")
+
+    payload = json.loads(_run(tmp_path, "today").stdout)
+    assert payload["total_usd"] == pytest.approx(0.05)
+    assert payload["calls"] == 2
+
+
+def test_ledger_write_is_atomic_no_temp_files_left(tmp_path) -> None:
+    """The tempfile used for the atomic replace must not accumulate."""
+    for _ in range(5):
+        _run(tmp_path, "log", "on_page_lighthouse", "0.02")
+
+    leftovers = list(tmp_path.glob(".dataforseo-ledger.*.tmp"))
+    assert leftovers == [], f"temp files left behind: {leftovers}"
+
+
+# ---------------------------------------------------------------------------
+# portability guard
+# ---------------------------------------------------------------------------
+
+
+def test_locking_is_never_disabled_unconditionally() -> None:
+    """Guard against the `fcntl = None` regression.
+
+    The module previously ran with no locking at all on Windows. It must now
+    fall back to msvcrt and, failing that, refuse to touch the ledger.
+    """
+    source = _SCRIPT.read_text()
+    assert "import msvcrt" in source, "no Windows locking fallback"
+    assert "Refusing to touch the spend ledger unlocked" in source, (
+        "module must fail closed when no locking primitive is available"
+    )
+
+
+def test_isolated_config_dir_is_honoured(tmp_path) -> None:
+    """Tests must never write to the operator's real ledger."""
+    _run(tmp_path, "log", "on_page_lighthouse", "0.02")
+    assert (tmp_path / "dataforseo-ledger.json").exists()

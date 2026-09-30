@@ -44,13 +44,13 @@ Backlinks, Domain Analytics, On-Page, and Content Analysis rose ~20% on
 | AI optimization (per call) | $0.05 |
 
 See `../../../scripts/dataforseo_costs.py` for the exact per-endpoint model and
-`claude-seo run dataforseo_costs.py estimate <endpoint> --count N` to check a
+`"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run dataforseo_costs.py estimate <endpoint> --count N` to check a
 specific call before spending. Free readiness/probe endpoints (`appendix/user_data`,
 `*/locations`, `*/languages`) never cost anything -- see step 6 below.
 
 ## 4. Manual MCP Configuration
 
-If the installer's auto-configuration fails, add this to `~/.claude/settings.json`:
+If the installer's auto-configuration fails, add this to `~/.claude.json`:
 
 ```json
 {
@@ -103,7 +103,7 @@ before running anything that spends credit:
 
 ```bash
 export DATAFORSEO_USERNAME='...' DATAFORSEO_PASSWORD='...'
-claude-seo run dfs_vn_probe.py
+"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run dfs_vn_probe.py
 ```
 
 It never prints a credential, even on error.
