@@ -1,7 +1,7 @@
 """Phase J item 2: content_humanize's Vietnamese table is a generated copy.
 
-The single list of Vietnamese lexical tells lives in claude-blog's
-scripts/vi_profile.py. This repository carries a generated copy
+The single list of Vietnamese lexical tells lives in
+claude-blog/scripts/vi_profile.py (the sibling checkout). This repository carries a generated copy
 (scripts/vi_tells_generated.py) so the two installs stay independent. These
 tests fail when someone edits the copy by hand, and (when the sibling
 claude-blog checkout is present) when it drifts from the source.
