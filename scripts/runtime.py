@@ -133,6 +133,49 @@ def _data_dir(root: Path) -> tuple[Path, str]:
     return root, "manual"
 
 
+def _find_uv() -> str | None:
+    """Path of uv, or None. Order: AI_CONTENT_NO_UV=1 disables it, then $UV, then PATH,
+    then the folders the official uv installers use (not on PATH until a new shell)."""
+    if os.environ.get("AI_CONTENT_NO_UV", "").strip().lower() in ("1", "true", "yes"):
+        return None
+    exe = "uv.exe" if sys.platform == "win32" else "uv"
+    configured = os.environ.get("UV")
+    if configured and Path(configured).is_file():
+        return configured
+    found = shutil.which("uv")
+    if found:
+        return found
+    for folder in (Path.home() / ".local" / "bin", Path.home() / ".cargo" / "bin"):
+        candidate = folder / exe
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _private_browsers() -> bool:
+    """Opt in to a browsers folder private to this runtime (data_dir/ms-playwright)."""
+    return os.environ.get("CLAUDE_SEO_PRIVATE_BROWSERS", "").strip().lower() in ("1", "true", "yes")
+
+
+def _default_browsers_dir() -> Path:
+    """Where Playwright keeps browsers when PLAYWRIGHT_BROWSERS_PATH is not set."""
+    configured = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if configured and configured != "0":
+        return Path(configured).expanduser()
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        return base / "ms-playwright"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "ms-playwright"
+    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "ms-playwright"
+
+
+def _browsers_dir(data_dir: Path) -> Path:
+    """The browsers folder this runtime reads and writes. Shared by default so the
+    hub keeps one Chromium (the hub, claude-seo and codex-seo pin one Playwright)."""
+    return data_dir / "ms-playwright" if _private_browsers() else _default_browsers_dir()
+
+
 def _venv_python(venv: Path) -> Path:
     return venv / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
 
@@ -170,7 +213,7 @@ def _status(root: Path) -> dict[str, Any]:
     for key in ("runtime_schema", "requirements_sha256", "python"):
         if state.get(key) != expected[key]:
             reasons.append(f"{key} changed")
-    browser_dir = data_dir / "ms-playwright"
+    browser_dir = _browsers_dir(data_dir)
     try:
         browser_installed = browser_dir.is_dir() and any(
             child.name.startswith(("chromium-", "chromium_headless_shell-"))
@@ -197,7 +240,10 @@ def _safe_env(status: dict[str, Any]) -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
-    env["PLAYWRIGHT_BROWSERS_PATH"] = str(status["data_dir"] / "ms-playwright")
+    if _private_browsers():
+        env["PLAYWRIGHT_BROWSERS_PATH"] = str(status["data_dir"] / "ms-playwright")
+    # Otherwise leave it alone: unset means Playwright's default folder, which the
+    # hub shares; a value the operator set is honoured as is.
     return env
 
 
@@ -271,6 +317,40 @@ class SetupLock:
         self.path.unlink(missing_ok=True)
 
 
+def _build_staged_env(uv: str | None, staged: Path, root: Path, env: dict[str, str]) -> None:
+    """Create the staged venv and install requirements.txt into it.
+
+    With uv, packages come from uv's shared cache by hardlink, so this venv costs
+    little disk next to the hub's other venvs. Without uv: venv plus pip, as before."""
+    requirements = str(root / "requirements.txt")
+    if uv:
+        # --seed keeps `python -m pip` available, as with a venv made by pip.
+        _run_checked([uv, "venv", "--quiet", "--seed", "--python", sys.executable, str(staged)],
+                     env=env, stage="virtual environment creation (uv)")
+        _run_checked([uv, "pip", "install", "--quiet", "--python", str(_venv_python(staged)), "-r", requirements],
+                     env=env, stage="dependency installation (uv)")
+        return
+    # venv bootstraps pip itself but discards ensurepip's output, so a
+    # failing bootstrap would surface only as "ensurepip returned 1".
+    # Running it as its own stage keeps pip's diagnostics visible.
+    _run_checked(
+        [sys.executable, "-m", "venv", "--without-pip", str(staged)],
+        env=env,
+        stage="virtual environment creation",
+    )
+    staged_python = _venv_python(staged)
+    _run_checked(
+        [str(staged_python), "-m", "ensurepip", "--upgrade", "--default-pip"],
+        env=env,
+        stage="pip bootstrap",
+    )
+    _run_checked(
+        [str(staged_python), "-m", "pip", "install", "--disable-pip-version-check", "-r", requirements],
+        env=env,
+        stage="dependency installation",
+    )
+
+
 def command_setup(args: argparse.Namespace) -> int:
     root = _root()
     status = _status(root)
@@ -289,25 +369,18 @@ def command_setup(args: argparse.Namespace) -> int:
     try:
         with SetupLock(data_dir / ".setup.lock"):
             print("Creating isolated Claude SEO environment...", flush=True)
-            # venv bootstraps pip itself but discards ensurepip's output, so a
-            # failing bootstrap would surface only as "ensurepip returned 1".
-            # Running it as its own stage keeps pip's diagnostics visible.
-            _run_checked(
-                [sys.executable, "-m", "venv", "--without-pip", str(staged)],
-                env=env,
-                stage="virtual environment creation",
-            )
+            uv = _find_uv()
+            if uv:
+                try:
+                    _build_staged_env(uv, staged, root, env)
+                except RuntimeError as exc:
+                    # uv is an optimisation, never a requirement: retry with pip.
+                    print(f"uv could not build the environment, falling back to pip: {_redact(str(exc))}", file=sys.stderr)
+                    shutil.rmtree(staged, ignore_errors=True)
+                    _build_staged_env(None, staged, root, env)
+            else:
+                _build_staged_env(None, staged, root, env)
             staged_python = _venv_python(staged)
-            _run_checked(
-                [str(staged_python), "-m", "ensurepip", "--upgrade", "--default-pip"],
-                env=env,
-                stage="pip bootstrap",
-            )
-            _run_checked(
-                [str(staged_python), "-m", "pip", "install", "--disable-pip-version-check", "-r", str(root / "requirements.txt")],
-                env=env,
-                stage="dependency installation",
-            )
             if not args.skip_browser:
                 try:
                     _run_checked(

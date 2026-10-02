@@ -20,6 +20,15 @@ runtime = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runtime)
 
 
+@pytest.fixture(autouse=True)
+def _pip_path_and_shared_browsers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests below describe the pip path and the default browsers folder; the uv
+    and private-browsers tests set what they need themselves."""
+    monkeypatch.setenv("AI_CONTENT_NO_UV", "1")
+    monkeypatch.delenv("CLAUDE_SEO_PRIVATE_BROWSERS", raising=False)
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
+
+
 def _fixture_root(tmp_path: Path) -> Path:
     root = tmp_path / "plugin root"
     (root / "scripts").mkdir(parents=True)
@@ -100,11 +109,37 @@ def test_doctor_json_omits_paths_and_environment_values(
     }
 
 
-def test_child_environment_forces_utf8_and_persistent_browser_path(tmp_path: Path) -> None:
+def test_child_environment_forces_utf8_and_shares_the_default_browsers_folder(tmp_path: Path) -> None:
     env = runtime._safe_env({"data_dir": tmp_path})
     assert env["PYTHONUTF8"] == "1"
     assert env["PYTHONIOENCODING"] == "utf-8"
+    # Shared by default: nothing is forced, so Playwright uses its default folder.
+    assert "PLAYWRIGHT_BROWSERS_PATH" not in env
+
+
+def test_private_browsers_folder_is_an_explicit_opt_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLAUDE_SEO_PRIVATE_BROWSERS", "1")
+    env = runtime._safe_env({"data_dir": tmp_path})
     assert env["PLAYWRIGHT_BROWSERS_PATH"] == str(tmp_path / "ms-playwright")
+    assert runtime._browsers_dir(tmp_path) == tmp_path / "ms-playwright"
+
+
+def test_operator_browsers_path_is_honoured_when_shared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path / "mine"))
+    assert runtime._browsers_dir(tmp_path / "data") == tmp_path / "mine"
+    assert runtime._safe_env({"data_dir": tmp_path})["PLAYWRIGHT_BROWSERS_PATH"] == str(tmp_path / "mine")
+
+
+def test_default_browsers_folder_per_platform(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runtime.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    monkeypatch.setattr(runtime.sys, "platform", "linux")
+    assert runtime._default_browsers_dir() == tmp_path / ".cache" / "ms-playwright"
+    monkeypatch.setattr(runtime.sys, "platform", "darwin")
+    assert runtime._default_browsers_dir() == tmp_path / "Library" / "Caches" / "ms-playwright"
+    monkeypatch.setattr(runtime.sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    assert runtime._default_browsers_dir() == tmp_path / "Local" / "ms-playwright"
 
 
 def test_configured_data_dir_rejects_filesystem_root_and_user_home(
@@ -151,10 +186,18 @@ def test_browser_marker_requires_browser_files(tmp_path: Path, monkeypatch: pyte
     python.parent.mkdir(parents=True)
     python.write_text("", encoding="utf-8")
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data))
+    shared = tmp_path / "shared-browsers"
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(shared))
     expected = runtime._expected(root)
     (data / "runtime-state.json").write_text(
         json.dumps({**expected, "browser_ready": True}), encoding="utf-8"
     )
+    assert runtime._status(root)["browser_ready"] is False
+    (shared / "chromium-123").mkdir(parents=True)
+    assert runtime._status(root)["browser_ready"] is True
+    # A private folder is looked at only when asked for.
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH")
+    monkeypatch.setenv("CLAUDE_SEO_PRIVATE_BROWSERS", "1")
     assert runtime._status(root)["browser_ready"] is False
     (data / "ms-playwright" / "chromium-123").mkdir(parents=True)
     assert runtime._status(root)["browser_ready"] is True
@@ -318,6 +361,111 @@ def test_redaction_covers_repr_quoted_home(monkeypatch: pytest.MonkeyPatch) -> N
     )
     assert "someone" not in redacted
     assert redacted.count("<home>") == 3
+
+
+def _setup_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_previous: bool) -> tuple[Path, Path]:
+    root = _fixture_root(tmp_path)
+    data = tmp_path / "data"
+    final = data / ".venv"
+    if with_previous:
+        old_python = runtime._venv_python(final)
+        old_python.parent.mkdir(parents=True)
+        old_python.write_text("old", encoding="utf-8")
+        (final / "old-sentinel").write_text("keep", encoding="utf-8")
+    data.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data))
+    monkeypatch.setattr(runtime, "_root", lambda: root)
+    return data, final
+
+
+def test_find_uv_respects_opt_out_and_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = tmp_path / "myuv"
+    fake.write_text("", encoding="utf-8")
+    monkeypatch.setenv("UV", str(fake))
+    assert runtime._find_uv() is None  # AI_CONTENT_NO_UV=1 from the autouse fixture
+    monkeypatch.delenv("AI_CONTENT_NO_UV")
+    assert runtime._find_uv() == str(fake)
+    monkeypatch.delenv("UV")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setattr(runtime.Path, "home", classmethod(lambda cls: tmp_path / "nohome"))
+    assert runtime._find_uv() is None  # no uv anywhere: the pip path
+
+
+def test_setup_builds_with_uv_when_present_and_keeps_the_atomic_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data, final = _setup_fixture(tmp_path, monkeypatch, with_previous=True)
+    monkeypatch.delenv("AI_CONTENT_NO_UV")
+    monkeypatch.setenv("UV", str(tmp_path / "uv"))
+    (tmp_path / "uv").write_text("", encoding="utf-8")
+    stages: list[str] = []
+
+    def fake_checked(argv: list[str], *, env: dict[str, str], stage: str) -> subprocess.CompletedProcess[str]:
+        stages.append(stage)
+        if stage == "virtual environment creation (uv)":
+            assert argv[:2] == [str(tmp_path / "uv"), "venv"]
+            staged_python = runtime._venv_python(Path(argv[-1]))
+            staged_python.parent.mkdir(parents=True)
+            staged_python.write_text("new", encoding="utf-8")
+        if stage == "dependency installation (uv)":
+            assert argv[1:3] == ["pip", "install"] and "--python" in argv
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(runtime, "_run_checked", fake_checked)
+    assert runtime.command_setup(SimpleNamespace(skip_browser=True)) == 0
+    assert stages[:2] == ["virtual environment creation (uv)", "dependency installation (uv)"]
+    assert runtime._venv_python(final).read_text(encoding="utf-8") == "new"
+    assert not (data / ".venv.previous").exists()
+
+
+def test_uv_failure_falls_back_to_pip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data, final = _setup_fixture(tmp_path, monkeypatch, with_previous=False)
+    monkeypatch.delenv("AI_CONTENT_NO_UV")
+    monkeypatch.setenv("UV", str(tmp_path / "uv"))
+    (tmp_path / "uv").write_text("", encoding="utf-8")
+    stages: list[str] = []
+
+    def fake_checked(argv: list[str], *, env: dict[str, str], stage: str) -> subprocess.CompletedProcess[str]:
+        stages.append(stage)
+        if stage.endswith("(uv)"):
+            raise RuntimeError(f"{stage} failed with exit code 2")
+        if stage == "virtual environment creation":
+            staged_python = runtime._venv_python(Path(argv[-1]))
+            staged_python.parent.mkdir(parents=True)
+            staged_python.write_text("pip-built", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(runtime, "_run_checked", fake_checked)
+    assert runtime.command_setup(SimpleNamespace(skip_browser=True)) == 0
+    assert stages == [
+        "virtual environment creation (uv)",
+        "virtual environment creation",
+        "pip bootstrap",
+        "dependency installation",
+        "runtime import validation",
+    ]
+    assert runtime._venv_python(final).read_text(encoding="utf-8") == "pip-built"
+
+
+def test_no_uv_runs_exactly_the_old_pip_stages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _setup_fixture(tmp_path, monkeypatch, with_previous=False)
+    monkeypatch.setenv("UV", str(tmp_path / "uv"))
+    (tmp_path / "uv").write_text("", encoding="utf-8")  # present, but AI_CONTENT_NO_UV=1 wins
+    stages: list[str] = []
+
+    def fake_checked(argv: list[str], *, env: dict[str, str], stage: str) -> subprocess.CompletedProcess[str]:
+        stages.append(stage)
+        if stage == "virtual environment creation":
+            staged_python = runtime._venv_python(Path(argv[-1]))
+            staged_python.parent.mkdir(parents=True)
+            staged_python.write_text("x", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(runtime, "_run_checked", fake_checked)
+    assert runtime.command_setup(SimpleNamespace(skip_browser=True)) == 0
+    assert stages == [
+        "virtual environment creation", "pip bootstrap", "dependency installation", "runtime import validation",
+    ]
 
 
 def test_browser_setup_warning_is_redacted(

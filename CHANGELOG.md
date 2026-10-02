@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The managed runtime builds its venv with uv when it is installed (`uv venv`
+  plus `uv pip install`, packages hardlinked from uv's shared cache) and falls
+  back to venv plus pip when uv is absent, fails, or `AI_CONTENT_NO_UV=1` is
+  set. The staged build, atomic swap and rollback are unchanged.
+- Chromium now lives in Playwright's default browsers folder (or
+  `PLAYWRIGHT_BROWSERS_PATH`) instead of a private `ms-playwright` next to the
+  runtime, so a host that already has Chromium keeps one copy. Set
+  `CLAUDE_SEO_PRIVATE_BROWSERS=1` for the old private folder.
+- `playwright` is pinned to `==1.63.0` (one Chromium build per Playwright
+  release). Keep it equal to the hub's `config/constraints.txt`.
+
+### Changed
+
 - `content_humanize.py --lang vi` now uses a generated copy of the Vietnamese
   tell table (`vi_tells_generated.py`, header "do not edit") produced from
   claude-blog's single list in `vi_profile.py`. Tests fail on a hand edit or on
