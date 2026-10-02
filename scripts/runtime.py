@@ -47,7 +47,7 @@ ALLOWED_CORE_SCRIPTS = frozenset(
         "portability_check.py", "consistency_check.py",
         "schema_ecommerce_validate.py", "schema_generate.py", "seo_updates.py",
         "sitemap_discovery.py", "sync_flow.py", "ucp_check.py", "unlighthouse_run.py",
-        "url_safety.py", "validate_backlink_report.py", "verify_backlinks.py",
+        "gsc_links_import.py", "url_safety.py", "validate_backlink_report.py", "verify_backlinks.py",
         "youtube_search.py",
     }
 )

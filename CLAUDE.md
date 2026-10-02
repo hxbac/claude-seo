@@ -90,7 +90,7 @@ claude-seo/
     seo-flow.md                  # FLOW framework integration
   hooks/                           # Quality gate hooks
     hooks.json                   # PostToolUse schema validation
-  scripts/                         # 62 Python execution scripts
+  scripts/                         # 64 Python execution scripts
     env_file.py                  # Shared credentials file loader with multi-slot key rotation
     dfs_vn_probe.py              # DataForSEO Vietnam (location 2704, vi) endpoint probe
     google_auth.py               # Credential management (OAuth, SA, API key, 4-tier detection)
@@ -99,6 +99,7 @@ claude-seo/
     bing_webmaster.py            # Bing Webmaster Tools API (registered-site links/comparison)
     commoncrawl_graph.py         # Common Crawl web graph parser (PageRank, in-degree)
     verify_backlinks.py          # Backlink existence verification crawler
+    gsc_links_import.py          # Search Console Links export (CSV/XLSX/zip) importer, feeds verify_backlinks
     pagespeed_check.py           # PSI v5 + CrUX API
     crux_history.py              # CrUX History API (25-week trends)
     gsc_query.py                 # Search Console (queries, pages, sitemaps, sites)
@@ -153,6 +154,7 @@ claude-seo/
     verify_release.py            # Verify checkout integrity against a release manifest
     sitemap_discovery.py         # Sitemap discovery (robots.txt, common paths)
     runtime.py                   # Managed runtime behind the claude-seo launcher
+    vi_tells_generated.py        # Generated copy of the Vietnamese tell table (do not edit)
   schema/                          # Schema.org JSON-LD templates
   extensions/                      # Optional add-on install helpers
     dataforseo/                  # DataForSEO MCP install scripts
